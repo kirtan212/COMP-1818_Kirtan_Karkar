@@ -1,0 +1,21 @@
+Feature,Importance
+Credit History,0.9778701
+Loanamount,0.3172978
+Property Area Semiurban,0.27832702
+Applicantincome,0.26898342
+Coapplicantincome,0.1668967
+Married No,0.15325364
+Education Graduate,0.10241796
+Dependents 1,0.083319925
+Loan Amount Term,0.080350995
+Dependents 0,0.06521018
+Dependents 2,0.061659902
+Property Area Rural,0.04225032
+Gender Female,0.013496844
+Dependents 3+,0.012614374
+Self Employed No,0.00902723
+Property Area Urban,0.0026763033
+Married Yes,0.0
+Gender Male,0.0
+Education Not Graduate,0.0
+Self Employed Yes,0.0

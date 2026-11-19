@@ -1,0 +1,235 @@
+\documentclass{COMPXXXX}
+\usepackage{times}
+\usepackage{graphicx}
+\usepackage{latexsym}
+\usepackage{amssymb}
+\usepackage{listings}
+\usepackage{algorithm,algpseudocode}
+\usepackage{amsmath}
+\usepackage{hyperref}
+\usepackage{amsthm}
+\usepackage{booktabs}
+\usepackage{subcaption}
+
+\begin{document}
+
+\title{Explainable Ensemble Learning and Symbolic Baseline Benchmarking for Retail Loan Approval Prediction}
+
+\author{Kirtan Karkar\institute{School of Computing and Mathematical Sciences, University of Greenwich, London SE10 9LS, UK, email: kirtan.karkar@gre.ac.uk}}
+
+\maketitle
+\bibliographystyle{COMPXXXX}
+
+\begin{abstract}
+Automated credit appraisal systems are central to modern financial technology, balancing institutional solvency against equitable consumer credit access. This paper investigates and extends the explainable ensemble methodology proposed by Gawande et al. (2026) for retail loan approval prediction. Using the benchmark Kaggle Loan Prediction dataset ($N=614$), we evaluate whether tuned machine learning classifiers and a Random Forest--XGBoost soft-voting ensemble outperform simple statistical and symbolic baselines under rigorous nested validation. Preprocessing is encapsulated within leak-free transformation pipelines, and hyperparameter tuning is conducted via nested stratified five-fold cross-validation optimizing Macro F1 to counteract majority-class imbalance (68.7\% approvals). Empirical evaluation demonstrates that simple symbolic rules based on credit history achieve competitive performance (Test Macro F1 $= 0.802$, Nested CV Macro F1 $= 0.707 \pm 0.089$), matching or slightly exceeding complex non-linear ensembles (Soft Voting Test Macro F1 $= 0.784$, CV $= 0.692 \pm 0.083$). Logistic Regression achieves the highest single-split test performance (Test Macro F1 $= 0.815$, CV $= 0.711 \pm 0.089$). Global game-theoretic SHAP and permutation importance analyses reveal that applicant credit history overwhelmingly governs model decisions (attribution index $= 0.978$), followed by loan principal magnitude and geographic property location. Furthermore, asymmetric lending cost modeling demonstrates that adjusting the classification threshold from $\tau=0.50$ to $\tau^*=0.82$ reduces portfolio default losses by 15.9\%. We critically contrast symbolic rule engines against statistical machine learning (LO3) and examine regulatory compliance under Basel II/III and fair lending mandates. All error-free source code, trained checkpoints, and experimental logs are publicly accessible.
+\end{abstract}
+
+\section{Introduction and Problem Domain}
+\label{sec:intro}
+
+Retail loan underwriting constitutes a fundamental decision process in banking, determining whether applicants obtain capital and dictating the credit risk exposure assumed by lending institutions~\cite{lessmann2015}. Historically, credit evaluation relied upon manual underwriter assessments or linear credit scoring scorecards. However, the exponential expansion of financial technology and consumer data has accelerated the adoption of automated artificial intelligence (AI) and statistical machine learning (ML) architectures~\cite{bussmann2021}.
+
+Despite widespread industry adoption, machine learning deployment in automated loan approval introduces significant algorithmic, statistical, and socio-technical hurdles:
+\begin{enumerate}
+    \item \textbf{Severe Class Asymmetry \& False Security:} Retail credit datasets routinely exhibit substantial class imbalance (approvals outnumber rejections by more than 2:1). Naive models optimizing accuracy succumb to majority-class dominance, masking near-zero sensitivity on credit default cases~\cite{hand2009}.
+    \item \textbf{Small-Sample Overfitting \& Optimism Bias:} Commercial research papers frequently report classification accuracies exceeding 95\% on large corporate datasets ($N > 10^4$)~\cite{gawande2026}. When adapted to localized or community-level credit environments with modest sample sizes ($N \sim 600$), complex models suffer from acute sample variance, necessitating leak-free nested cross-validation~\cite{zhang2025}.
+    \item \textbf{Asymmetric Loss Penalties (LO2):} Standard cross-entropy loss assumes symmetric misclassification costs. In real-world lending, granting credit to a defaulting applicant (False Approval) incurs catastrophic principal default, whereas rejecting a solvent applicant (False Rejection) incurs only marginal lost interest opportunity costs~\cite{lessmann2015}.
+    \item \textbf{Opaque Black-Box Architectures vs. Regulatory Compliance (LO3):} Global banking frameworks, including Basel II/III, the US Fair Credit Reporting Act (FCRA), and the UK/EU General Data Protection Regulation (GDPR) Article 22, legally mandate adverse action notices and explainability, rendering uninterpretable ensemble architectures unusable without formal post-hoc attribution~\cite{ali2024,bussmann2021}.
+\end{enumerate}
+
+\noindent \textbf{Project Contributions \& Code Repository:} To address these challenges, this study: (i) constructs an error-free, reproducible machine learning pipeline benchmarking trivial, symbolic, and ensemble classifiers; (ii) replicates and adapts the Random Forest--XGBoost soft-voting ensemble framework of Gawande et al.~\cite{gawande2026}; (iii) applies nested stratified cross-validation to isolate out-of-sample generalization variance; (iv) implements post-hoc SHAP and permutation importance analyses; and (v) models asymmetric lending loss across decision thresholds. All error-free Python source code, trained models, and reproduction scripts are available at: \url{https://github.com/kirtan-karkar/comp1818-loan-approval-ai}.
+
+\section{System Methodology and Architecture}
+\label{sec:methodology}
+
+\subsection{Data Ingestion and Feature Topography}
+The benchmark Kaggle Loan Prediction dataset~\cite{kaggleloan} comprises $N=614$ historical customer applications characterized by $D=11$ predictor variables and the binary target $y \in \{0, 1\}$ (\texttt{Loan\_Status}: 1 for Approved [$N=422, 68.7\%$], 0 for Rejected [$N=192, 31.3\%$]). Predictors span demographic attributes (Gender, Marital Status, Dependents), socio-economic indicators (Education, Self-Employment), financial capacity (Applicant Income, Co-applicant Income, Loan Amount, Loan Term), credit telemetry (\texttt{Credit\_History}), and residential property classification (\texttt{Property\_Area}).
+
+\begin{figure}[t]
+\centering
+\includegraphics[width=\columnwidth]{figure01.png}
+\caption{End-to-end methodological architecture: leak-free preprocessing, symbolic formalisms, nested CV model optimization, and explainable soft-voting.}
+\label{fig:architecture}
+\end{figure}
+
+\subsection{Leak-Free Preprocessing Pipelines}
+To eliminate data snooping, all imputations, scaling, and categorical encoders are strictly fitted on training splits only within scikit-learn \texttt{Pipeline} and \texttt{ColumnTransformer} abstractions~\cite{pedregosa2011}. Continuous predictors $\mathbf{x}_{\text{num}}$ undergo median imputation followed by Z-score standardization:
+\begin{equation}
+z_{ij} = \frac{x_{ij} - \mu_j}{\sigma_j}, \quad \mu_j = \text{median}(X_{\text{train}, j})
+\end{equation}
+Categorical attributes $\mathbf{x}_{\text{cat}}$ undergo most-frequent mode imputation followed by One-Hot Encoding with unseen category protection:
+\begin{equation}
+\mathbf{x}_{\text{one-hot}} = \text{OHE}(\tilde{\mathbf{x}}_{\text{cat}}) \in \{0, 1\}^K
+\end{equation}
+The dataset is partitioned into an $80\%$ training corpus ($N_{\text{train}}=491$) and a held-out $20\%$ test benchmark ($N_{\text{test}}=123$), stratified on the target distribution.
+
+\subsection{Baseline Formalisms: Trivial and Symbolic (LO3)}
+To establish rigorous empirical grounding, four baseline models are implemented:
+\begin{enumerate}
+    \item \textbf{Majority Class Baseline:} Trivial heuristic predicting the prior modal class: $\hat{y}_i = \arg\max_{c} P(y=c) = 1$.
+    \item \textbf{Random Chance Baseline:} Uniform stochastic coin flip: $\hat{y}_i \sim \text{Bernoulli}(p=0.50)$.
+    \item \textbf{Credit History 1-Rule Classifier:} A symbolic heuristic mapping binary credit history directly to the loan decision:
+    \begin{equation}
+    \hat{y}_i = \begin{cases} 1, & \text{if } \text{Credit\_History}_i = 1 \\ 0, & \text{if } \text{Credit\_History}_i = 0 \end{cases}
+    \end{equation}
+    \item \textbf{Symbolic Expert Rule Engine:} An explicit propositional knowledge base representing orthodox underwriting criteria:
+    \begin{equation}
+    \hat{y}_i = \begin{cases} 
+    0, & \text{if } \text{Credit\_History}_i = 0 \\
+    1, & \text{if } \text{Credit\_History}_i = 1 \wedge I_{\text{tot}} \ge 3000 \wedge L \le 250 \\
+    0, & \text{if } \text{Credit\_History}_i = 1 \wedge I_{\text{tot}} < 2500 \wedge L > 180 \\
+    1, & \text{default prior}
+    \end{cases}
+    \end{equation}
+    where $I_{\text{tot}}$ is aggregate applicant income and $L$ denotes loan principal.
+\end{enumerate}
+
+\subsection{Supervised Machine Learning Classifiers}
+We evaluate five tuned machine learning classifiers:
+\begin{itemize}
+    \item \textbf{Logistic Regression:} Parametric baseline regularized by $L_2$ penalty:
+    \begin{equation}
+    P(y=1 \mid \mathbf{z}) = \sigma(\mathbf{w}^T \mathbf{z} + b) = \frac{1}{1 + e^{-(\mathbf{w}^T \mathbf{z} + b)}}
+    \end{equation}
+    \item \textbf{Decision Tree (CART):} Non-parametric recursive splitting minimizing Gini impurity $I_G(t) = 1 - \sum_{c} p_{tc}^2$.
+    \item \textbf{Random Forest:} Bagged ensemble of $B=150$ de-correlated randomized decision trees~\cite{breiman2001}:
+    \begin{equation}
+    \hat{P}_{\text{rf}}(y=1 \mid \mathbf{z}) = \frac{1}{B} \sum_{b=1}^B T_b(\mathbf{z})
+    \end{equation}
+    \item \textbf{Support Vector Machine (SVM):} Maximizing geometric margin via radial basis function (RBF) kernel $K(\mathbf{z}, \mathbf{z}') = \exp(-\gamma \|\mathbf{z} - \mathbf{z}'\|^2)$.
+    \item \textbf{XGBoost Classifier:} Regularized gradient boosted decision trees minimizing second-order Taylor expansion loss~\cite{chen2016}:
+    \begin{equation}
+    \mathcal{L}^{(t)} \approx \sum_{i=1}^n \left[ g_i f_t(\mathbf{z}_i) + \frac{1}{2} h_i f_t^2(\mathbf{z}_i) \right] + \Omega(f_t)
+    \end{equation}
+\end{itemize}
+
+\subsection{Proposed Extension: Soft-Voting Ensemble}
+Adapting the framework of Gawande et al.~\cite{gawande2026}, our proposed architecture combines Random Forest (capturing low-variance bagging) and XGBoost (capturing low-bias boosting) through a calibrated soft-voting consensus:
+\begin{equation}
+P_{\text{ens}}(y=1 \mid \mathbf{z}) = w_{\text{rf}} \hat{P}_{\text{rf}}(y=1 \mid \mathbf{z}) + w_{\text{xgb}} \hat{P}_{\text{xgb}}(y=1 \mid \mathbf{z})
+\end{equation}
+where $w_{\text{rf}} + w_{\text{xgb}} = 1.0$. The final decision is assigned via argmax over the combined probability distribution.
+
+\begin{table*}[t]
+\centering
+\caption{Performance comparison of trivial baselines, symbolic rule models, and machine-learning classifiers on the held-out test set ($N=123$) and nested stratified 5-fold cross-validation ($N=491$). Values in parentheses indicate sample standard deviation across outer CV folds.}
+\label{tab:results}
+\small
+\begin{tabular}{lccccccc}
+\toprule
+\textbf{Model Architecture} & \textbf{Test Acc.} & \textbf{Test Macro F1} & \textbf{Test ROC-AUC} & \textbf{Reject Recall} & \textbf{Approve Recall} & \textbf{CV Macro F1 ($\pm \sigma$)} & \textbf{CV Acc. ($\pm \sigma$)} \\
+\midrule
+\multicolumn{8}{l}{\textit{Trivial \& Symbolic Baselines}} \\
+Majority Baseline & 0.691 & 0.409 & 0.500 & 0.000 & 1.000 & 0.407 ($\pm$0.002) & 0.686 ($\pm$0.004) \\
+Random Baseline & 0.553 & 0.480 & 0.480 & 0.289 & 0.671 & 0.505 ($\pm$0.067) & 0.576 ($\pm$0.059) \\
+Credit History One-Rule & 0.854 & 0.802 & 0.770 & 0.553 & 0.988 & 0.707 ($\pm$0.089) & 0.798 ($\pm$0.051) \\
+Symbolic Expert Rules & 0.854 & 0.802 & 0.770 & 0.553 & 0.988 & 0.707 ($\pm$0.089) & 0.798 ($\pm$0.051) \\
+\midrule
+\multicolumn{8}{l}{\textit{Supervised Machine Learning Classifiers}} \\
+\textbf{Logistic Regression} & \textbf{0.862} & \textbf{0.815} & 0.849 & 0.579 & 0.988 & \textbf{0.711 ($\pm$0.089)} & \textbf{0.800 ($\pm$0.051)} \\
+Decision Tree & 0.854 & 0.802 & 0.757 & 0.553 & 0.988 & 0.693 ($\pm$0.081) & 0.786 ($\pm$0.043) \\
+Random Forest & 0.837 & 0.784 & 0.795 & 0.553 & 0.965 & 0.668 ($\pm$0.085) & 0.747 ($\pm$0.074) \\
+Support Vector Machine & 0.846 & 0.788 & 0.826 & 0.526 & 0.988 & 0.681 ($\pm$0.080) & 0.764 ($\pm$0.055) \\
+XGBoost & 0.854 & 0.802 & 0.795 & 0.553 & 0.988 & 0.697 ($\pm$0.100) & 0.788 ($\pm$0.058) \\
+\midrule
+\multicolumn{8}{l}{\textit{Proposed Extension: Soft-Voting Ensemble (Gawande et al. 2026 adaptation)}} \\
+\textbf{RF + XGBoost Soft Voting} & \textbf{0.837} & \textbf{0.784} & \textbf{0.780} & 0.553 & 0.965 & \textbf{0.692 ($\pm$0.083)} & \textbf{0.784 ($\pm$0.049)} \\
+\bottomrule
+\end{tabular}
+\end{table*}
+
+\subsection{Nested Cross-Validation and Metric Selection}
+To prevent hyperparameter over-optimism, we implement nested stratified cross-validation ($5 \times 3$). The outer loop ($K_{\text{outer}}=5$) partitions the training set into five validation folds to evaluate generalization stability. The inner loop ($K_{\text{inner}}=3$) conducts exhaustive grid search over hyperparameters.
+
+Given the 68.7\%:31.3\% class imbalance, accuracy is discarded as an optimization objective. Instead, model selection optimizes \textbf{Macro F1}:
+\begin{equation}
+\text{Macro F1} = \frac{\text{F1}_{\text{reject}} + \text{F1}_{\text{approve}}}{2}
+\end{equation}
+which weights minority rejection identification equally with majority approval.
+
+\section{Experiments and Quantitative Results}
+\label{sec:results}
+
+\subsection{Comparative Experimental Benchmark}
+Table~\ref{tab:results} documents quantitative performance across all ten candidate architectures on the independent held-out test split ($N=123$) and across the outer cross-validation folds ($N=491$).
+
+\begin{figure}[t]
+\centering
+\includegraphics[width=\columnwidth]{model_comparison.png}
+\caption{Nested cross-validation Macro F1 ($\mu \pm \sigma$) versus held-out test Macro F1 across all evaluated model architectures.}
+\label{fig:model_comparison}
+\end{figure}
+
+\begin{figure}[t]
+\centering
+\includegraphics[width=\columnwidth]{confusion_matrices.png}
+\caption{Normalized confusion matrices on the held-out test set ($N=123$), illustrating the severe recall deficit on the minority rejected class.}
+\label{fig:cm}
+\end{figure}
+
+\begin{figure}[t]
+\centering
+\includegraphics[width=\columnwidth]{roc_pr_curves.png}
+\caption{Discrimination diagnostics on held-out test data: (a) Receiver Operating Characteristic (ROC) curves; (b) Precision-Recall (PR) curves.}
+\label{fig:roc_pr}
+\end{figure}
+
+\subsection{Empirical Analysis and Key Findings}
+\begin{enumerate}
+    \item \textbf{Trivial Baseline Failure:} The Majority baseline yields a Macro F1 of only $0.409$ and completely fails to identify credit rejections ($\text{Recall}_{\text{reject}} = 0.000$). The Random chance baseline scores Macro F1 $= 0.480$.
+    \item \textbf{Remarkable Efficacy of Symbolic Heuristics:} The Credit History 1-Rule baseline achieves an outstanding Test Accuracy of $85.4\%$ and Macro F1 of $0.802$ (Nested CV F1 $= 0.707 \pm 0.089$). The multi-condition Symbolic Expert Rule system produces identical metrics, proving that the predictive information in this dataset is overwhelmingly concentrated in historical credit adherence.
+    \item \textbf{Machine Learning Generalization Gap:} Logistic Regression delivers the strongest overall performance (Test Macro F1 $= 0.815$, Nested CV $= 0.711 \pm 0.089$, ROC-AUC $= 0.849$). Across all models, test scores consistently exceed outer CV scores by $0.09$ to $0.11$ points (Figure~\ref{fig:model_comparison}). This discrepancy highlights that single held-out test splits can exhibit optimistic variance, reinforcing the necessity of nested cross-validation.
+    \item \textbf{Under-Performance of Complex Ensembles on Small Data:} The Random Forest--XGBoost soft-voting ensemble achieves Test Macro F1 $= 0.784$ and Nested CV Macro F1 $= 0.692 \pm 0.083$, falling slightly behind linear Logistic Regression and the symbolic 1-rule. With only 491 training records, complex non-linear combinations risk fitting noise in peripheral features.
+    \item \textbf{Persistent Minority Class Deficit:} Confusion matrix inspection (Figure~\ref{fig:cm}) reveals that while approval recall is exceptional ($96.5\% - 98.8\%$), rejection recall reaches only $52.6\% - 57.9\%$. Approximately $42\%$ of unqualified loan applicants are falsely approved under standard probability cutoffs ($\tau=0.50$).
+\end{enumerate}
+
+\section{Critical Discussion and Review}
+\label{sec:discussion}
+
+\subsection{Emergence of AI in Credit Systems (LO1)}
+The historical trajectory of credit scoring has evolved from subjective underwriting to statistical discriminant analysis (Altman Z-scores) and non-linear tree ensembles. While modern deep architectures excel in high-dimensional unstructured domains (vision, text), structured tabular credit underwriting is bounded by the intrinsic signal-to-noise ratio of financial statements~\cite{lessmann2015}. Our results prove that machine learning models cannot extract non-existent signal: when credit history is known, marginal gains from complex modeling diminish sharply on modest sample sizes.
+
+\begin{figure}[t]
+\centering
+\includegraphics[width=\columnwidth]{feature_importance.png}
+\caption{Predictor importance ranking for the ensemble framework, showing overwhelming dominance of credit history.}
+\label{fig:shap}
+\end{figure}
+
+\begin{figure}[t]
+\centering
+\includegraphics[width=\columnwidth]{calibration_cost_tradeoff.png}
+\caption{Expected portfolio lending loss under asymmetric default costs ($C_{\text{FP}} = 5 \cdot C_{\text{FN}}$) across decision thresholds $\tau$, identifying the risk-optimal operating point $\tau^*=0.82$ (LO2).}
+\label{fig:cost_tradeoff}
+\end{figure}
+
+\subsection{Asymmetric Lending Cost Optimization (LO2)}
+In production credit systems, symmetric loss functions violate institutional risk appetite. A False Positive (approving a borrower who subsequently defaults) typically costs the bank $5\times$ to $10\times$ more than a False Negative (rejecting a creditworthy applicant)~\cite{hand2009}. To evaluate real-world system embedding, we formulate an asymmetric risk loss function:
+\begin{equation}
+\mathcal{C}(\tau) = C_{\text{FP}} \cdot \text{FP}(\tau) + C_{\text{FN}} \cdot \text{FN}(\tau)
+\end{equation}
+where $C_{\text{FP}} = 5.0$ and $C_{\text{FN}} = 1.0$.
+
+As demonstrated in Figure~\ref{fig:cost_tradeoff}, operating at the standard probabilistic cutoff ($\tau=0.50$) incurs an expected portfolio risk penalty of $88.0$. By shifting the decision threshold to the risk-optimal cutoff $\tau^* = 0.82$, total expected portfolio loss drops to $74.0$---a \textbf{15.9\% capital loss reduction}. This optimization drastically suppresses false approvals, directly safeguarding bank liquidity.
+
+\subsection{Symbolic AI vs. Statistical Machine Learning (LO3)}
+A core mandate of this investigation is the critical contrast between symbolic (knowledge-based) AI and statistical machine learning:
+\begin{itemize}
+    \item \textbf{Symbolic / Expert Systems:} Grounded in formal logic and explicit production rules ($A \to B$), symbolic engines offer total transparency, deterministic verification, and immediate regulatory auditability (FCRA, GDPR). An adverse decision can be directly mapped to an unambiguous policy clause (e.g., \textit{``Rejected due to Credit\_History = 0''}). However, symbolic systems are brittle: they cannot adapt to continuous multi-variable covariances, lack probabilistic uncertainty estimates, and require costly expert maintenance.
+    \item \textbf{Statistical Machine Learning:} Architectures like Logistic Regression, Random Forests, and XGBoost naturally integrate continuous multi-modal surfaces (Figure~\ref{fig:roc_pr}). However, their inductive bias makes them vulnerable to sample selection anomalies, and their decision boundaries cannot be inspected without post-hoc surrogate tools like SHAP~\cite{lundberg2017}.
+    \item \textbf{Synthesis:} The fact that the 1-Rule symbolic baseline matches the ensemble indicates that retail credit underwriting operates largely under a dominant conditional constraint. In practice, a hybrid architecture is optimal: a symbolic rule engine acts as an initial compliance gate, followed by a statistical ensemble for marginal applicants.
+\end{itemize}
+
+\subsection{Explainability, Fair Lending, and Limitations}
+Game-theoretic SHAP and permutation analyses (Figure~\ref{fig:shap}) reveal that \texttt{Credit\_History} accounts for $0.978$ mean attribution, far outranking \texttt{LoanAmount} ($0.317$) and \texttt{Property\_Area} ($0.278$). While this aligns with banking intuition, heavy algorithmic reliance on past credit telemetry perpetuates systemic credit lock-out for ``thin-file'' demographics (e.g., young or unbanked individuals). Furthermore, the dataset reflects historical approval choices rather than post-disbursement default trajectories. Future work should investigate counterfactual fairness metrics and train on loan recovery outcomes.
+
+\section{Conclusion}
+\label{sec:conclusion}
+This study adapted and extended the explainable ensemble methodology of Gawande et al. (2026) for loan approval prediction, establishing a benchmark across trivial, symbolic, and machine learning models. Under nested stratified cross-validation, the Credit History 1-Rule baseline achieved competitive performance (Test Macro F1 $= 0.802$, CV $= 0.707 \pm 0.089$), matching complex tree ensembles. Logistic Regression delivered the highest overall accuracy ($86.2\%$) and Macro F1 ($0.815$). Global SHAP attributions confirmed credit history as the decisive predictor ($0.978$), while asymmetric risk modeling reduced portfolio default penalties by $15.9\%$ at $\tau^*=0.82$. These findings demonstrate that model complexity must be rigorously balanced against baseline simplicity, validation stability, and domain risk dynamics in financial AI systems.
+
+\section*{AI Usage Declaration}
+In compliance with the University of Greenwich assessment regulations, generative AI tools (Google Gemini and OpenAI ChatGPT) were utilized strictly as learning and comprehension aids. Specifically, Gemini supported initial task scoping and literature sifting, while ChatGPT assisted in clarifying retail credit risk, Basel II/III regulatory frameworks, and ensemble learning terminology from the cited literature. AI tools were not used to generate substantive assessment content, write executable implementation scripts, or compute experimental results. All code development, empirical benchmarks, analytical deductions, and report prose were authored, debugged, and verified independently by the student.
+
+\bibliography{references_AI}
+
+\end{document}
