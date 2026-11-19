@@ -1,0 +1,29 @@
+{
+    "cost_fp": 5.0,
+    "cost_fn": 1.0,
+    "selected_threshold_oof": 0.84,
+    "oof_train": {
+        "n_samples": 491,
+        "default_tau_050_cost": 482.0,
+        "default_tau_050_cost_per_100": 98.16700610997964,
+        "default_tau_050_fp": 94,
+        "default_tau_050_fn": 12,
+        "opt_tau_cost": 317.0,
+        "opt_tau_cost_per_100": 64.56211812627292,
+        "opt_tau_fp": 16,
+        "opt_tau_fn": 237,
+        "cost_reduction_pct": 34.232365145228215
+    },
+    "heldout_test": {
+        "n_samples": 123,
+        "default_tau_050_cost": 88.0,
+        "default_tau_050_cost_per_100": 71.54471544715447,
+        "default_tau_050_fp": 17,
+        "default_tau_050_fn": 3,
+        "opt_tau_cost": 83.0,
+        "opt_tau_cost_per_100": 67.47967479674797,
+        "opt_tau_fp": 4,
+        "opt_tau_fn": 63,
+        "cost_reduction_pct": 5.681818181818176
+    }
+}

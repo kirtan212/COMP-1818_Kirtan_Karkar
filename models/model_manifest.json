@@ -1,0 +1,74 @@
+{
+    "oof_selected_threshold_rf_xgb_soft_voting": 0.84,
+    "cost_ratio_fp_to_fn": "5:1",
+    "models": {
+        "Majority Baseline": {
+            "file": "majority_baseline.joblib",
+            "best_params": {}
+        },
+        "Random Baseline": {
+            "file": "random_baseline.joblib",
+            "best_params": {}
+        },
+        "Credit History One-Rule": {
+            "file": "credit_history_one_rule.joblib",
+            "best_params": {}
+        },
+        "Symbolic Expert Rules": {
+            "file": "symbolic_expert_rules.joblib",
+            "best_params": {}
+        },
+        "Logistic Regression": {
+            "file": "logistic_regression.joblib",
+            "best_params": {
+                "classifier__C": 0.05,
+                "classifier__class_weight": null,
+                "classifier__solver": "lbfgs"
+            }
+        },
+        "Decision Tree": {
+            "file": "decision_tree.joblib",
+            "best_params": {
+                "classifier__class_weight": null,
+                "classifier__max_depth": 2,
+                "classifier__min_samples_leaf": 1,
+                "classifier__min_samples_split": 2
+            }
+        },
+        "Random Forest": {
+            "file": "random_forest.joblib",
+            "best_params": {
+                "classifier__class_weight": null,
+                "classifier__max_depth": 8,
+                "classifier__min_samples_leaf": 3,
+                "classifier__n_estimators": 100
+            }
+        },
+        "Support Vector Machine": {
+            "file": "support_vector_machine.joblib",
+            "best_params": {
+                "classifier__C": 0.1,
+                "classifier__class_weight": null,
+                "classifier__gamma": "auto"
+            }
+        },
+        "XGBoost": {
+            "file": "xgboost.joblib",
+            "best_params": {
+                "classifier__learning_rate": 0.03,
+                "classifier__max_depth": 2,
+                "classifier__n_estimators": 60,
+                "classifier__subsample": 0.8
+            }
+        },
+        "RF + XGBoost Soft Voting": {
+            "file": "rf_xgboost_soft_voting.joblib",
+            "best_params": {
+                "classifier__weights": [
+                    2,
+                    1
+                ]
+            }
+        }
+    }
+}

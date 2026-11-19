@@ -22,35 +22,37 @@ from xgboost import XGBClassifier
 class CreditHistoryRuleClassifier(BaseEstimator, ClassifierMixin):
     """
     Symbolic 1-Rule Classifier:
-    Infers the loan approval based exclusively on applicant credit history:
-    IF Credit_History == 1 -> Approve (1)
-    IF Credit_History == 0 -> Reject (0)
-    Missing values default to the training mode.
+    Infers loan approval exclusively from applicant credit history:
+      - Rule 1: IF Credit_History == 0 -> Reject (0)
+      - Rule 2: IF Credit_History == 1 -> Approve (1)
+    Missing Credit_History values are imputed with the training-fold mode.
+    Class probabilities reflect empirical training-fold approval frequencies.
     """
     def __init__(self):
         self.classes_ = np.array([0, 1])
-        self.default_history_ = 1.0
-        self.default_prediction_ = 1
-        self.rule_map_ = {}
 
     def fit(self, X, y):
-        self.classes_ = np.unique(y)
+        y_arr = np.asarray(y, dtype=int)
+        self.classes_ = np.unique(y_arr)
         if isinstance(X, pd.DataFrame):
             hist = X["Credit_History"].copy()
         else:
-            # Assumes Credit_History is at column index 4 in preprocessed numeric
             hist = pd.Series(X[:, 0])
 
-        self.default_history_ = hist.mode().iloc[0] if not hist.mode().empty else 1.0
+        self.default_history_ = float(hist.mode().iloc[0]) if not hist.mode().empty else 1.0
         hist_clean = hist.fillna(self.default_history_)
 
-        df_train = pd.DataFrame({"Credit_History": hist_clean.to_numpy(), "target": np.asarray(y)})
+        df_train = pd.DataFrame({"Credit_History": hist_clean.to_numpy(), "target": y_arr})
         self.rule_map_ = (
             df_train.groupby("Credit_History")["target"]
-            .agg(lambda vals: vals.mode().iloc[0] if not vals.mode().empty else 1)
+            .agg(lambda vals: int(vals.mode().iloc[0]) if not vals.mode().empty else 1)
             .to_dict()
         )
-        self.default_prediction_ = int(pd.Series(y).mode().iloc[0]) if len(y) > 0 else 1
+        self.rule_prob_map_ = (
+            df_train.groupby("Credit_History")["target"].mean().to_dict()
+        )
+        self.default_prediction_ = int(pd.Series(y_arr).mode().iloc[0]) if len(y_arr) > 0 else 1
+        self.default_prob_ = float(np.mean(y_arr)) if len(y_arr) > 0 else 0.5
         return self
 
     def predict(self, X):
@@ -64,72 +66,99 @@ class CreditHistoryRuleClassifier(BaseEstimator, ClassifierMixin):
         return preds.to_numpy().astype(int)
 
     def predict_proba(self, X):
-        preds = self.predict(X)
-        proba = np.zeros((len(preds), 2))
-        for i, p in enumerate(preds):
-            if p == 1:
-                proba[i] = [0.15, 0.85]
-            else:
-                proba[i] = [0.85, 0.15]
-        return proba
+        if isinstance(X, pd.DataFrame):
+            hist = X["Credit_History"].copy()
+        else:
+            hist = pd.Series(X[:, 0])
+
+        hist_clean = hist.fillna(self.default_history_)
+        p1 = hist_clean.map(self.rule_prob_map_).fillna(self.default_prob_).to_numpy(dtype=float)
+        p1 = np.clip(p1, 1e-6, 1.0 - 1e-6)
+        return np.column_stack([1.0 - p1, p1])
 
 
 class SymbolicExpertSystemClassifier(BaseEstimator, ClassifierMixin):
     """
     Domain Expert Multi-Condition Symbolic System (Addresses Learning Outcome LO3):
-    Explicit symbolic IF-THEN production rules representing bank policy:
-    - Rule 1: IF Credit_History == 0 -> Reject (0)
-    - Rule 2: IF Credit_History == 1 AND TotalIncome >= 3000 AND LoanAmount <= 250 -> Approve (1)
-    - Rule 3: IF Credit_History == 1 AND TotalIncome < 3000 AND LoanAmount > 150 -> Reject (0)
-    - Rule 4: Default -> Prior training majority class
+    Explicit propositional IF-THEN underwriting rules combining credit history
+    with a standard Loan-to-Annual-Income (LTI) affordability ceiling:
+      Let LTI = (1000 * LoanAmount) / (12 * (ApplicantIncome + CoapplicantIncome))
+      - Rule 1 (Credit History Gate):  IF Credit_History == 0 -> Reject (0)
+      - Rule 2 (Affordability Cap):    IF Credit_History == 1 AND LTI > max_lti -> Reject (0)
+      - Rule 3 (Eligible Approval):    IF Credit_History == 1 AND LTI <= max_lti -> Approve (1)
+    Missing Credit_History and LoanAmount values are imputed using training-fold
+    mode and median learned strictly during fit().
     """
-    def __init__(self, min_income=3000.0, max_loan=300.0):
-        self.min_income = min_income
-        self.max_loan = max_loan
+    def __init__(self, max_lti=3.0):
+        self.max_lti = max_lti
         self.classes_ = np.array([0, 1])
-        self.default_class_ = 1
+
+    def _evaluate_rules(self, X):
+        """Returns integer rule IDs (1, 2, or 3) fired for each row."""
+        if not isinstance(X, pd.DataFrame):
+            return np.full(len(X), 3, dtype=int)
+
+        ch = X["Credit_History"].fillna(self.default_history_).to_numpy(dtype=float)
+        app_inc = X["ApplicantIncome"].fillna(0.0).to_numpy(dtype=float)
+        coapp_inc = X["CoapplicantIncome"].fillna(0.0).to_numpy(dtype=float)
+        tot_inc = np.maximum(app_inc + coapp_inc, 1.0)
+        loan = X["LoanAmount"].fillna(self.median_loan_).to_numpy(dtype=float)
+
+        # LoanAmount is recorded in thousands; incomes are monthly
+        lti = (loan * 1000.0) / (12.0 * tot_inc)
+
+        rule_ids = np.full(len(X), 3, dtype=int)
+        rule_ids[(ch == 1.0) & (lti > self.max_lti)] = 2
+        rule_ids[ch == 0.0] = 1
+        return rule_ids
 
     def fit(self, X, y):
-        self.classes_ = np.unique(y)
-        self.default_class_ = int(pd.Series(y).mode().iloc[0]) if len(y) > 0 else 1
+        y_arr = np.asarray(y, dtype=int)
+        self.classes_ = np.unique(y_arr)
+        self.default_class_ = int(pd.Series(y_arr).mode().iloc[0]) if len(y_arr) > 0 else 1
+        self.default_prob_ = float(np.mean(y_arr)) if len(y_arr) > 0 else 0.5
+
+        if isinstance(X, pd.DataFrame):
+            self.default_history_ = (
+                float(X["Credit_History"].mode().iloc[0])
+                if not X["Credit_History"].mode().empty else 1.0
+            )
+            self.median_loan_ = (
+                float(X["LoanAmount"].median())
+                if not X["LoanAmount"].dropna().empty else 128.0
+            )
+        else:
+            self.default_history_ = 1.0
+            self.median_loan_ = 128.0
+
+        rule_ids = self._evaluate_rules(X)
+        self.rule_prob_map_ = {}
+        for rid in (1, 2, 3):
+            mask = rule_ids == rid
+            if np.any(mask):
+                self.rule_prob_map_[rid] = float(np.mean(y_arr[mask]))
+            else:
+                self.rule_prob_map_[rid] = 0.0 if rid in (1, 2) else 1.0
         return self
 
-    def predict(self, X):
-        preds = []
-        if isinstance(X, pd.DataFrame):
-            for _, row in X.iterrows():
-                ch = row.get("Credit_History", 1.0)
-                if pd.isna(ch):
-                    ch = 1.0
-                app_inc = row.get("ApplicantIncome", 3000.0)
-                coapp_inc = row.get("CoapplicantIncome", 0.0)
-                tot_inc = (0.0 if pd.isna(app_inc) else app_inc) + (0.0 if pd.isna(coapp_inc) else coapp_inc)
-                loan = row.get("LoanAmount", 140.0)
-                if pd.isna(loan):
-                    loan = 140.0
+    def count_rule_firings(self, X):
+        """Returns a dictionary with counts of how many rows trigger each rule."""
+        rule_ids = self._evaluate_rules(X)
+        return {
+            "Rule 1 (CH == 0 -> Reject)": int(np.sum(rule_ids == 1)),
+            f"Rule 2 (CH == 1 & LTI > {self.max_lti:.1f} -> Reject)": int(np.sum(rule_ids == 2)),
+            f"Rule 3 (CH == 1 & LTI <= {self.max_lti:.1f} -> Approve)": int(np.sum(rule_ids == 3)),
+        }
 
-                if ch == 0.0:
-                    preds.append(0)
-                elif ch == 1.0 and tot_inc >= self.min_income and loan <= self.max_loan:
-                    preds.append(1)
-                elif ch == 1.0 and tot_inc < 2500.0 and loan > 180.0:
-                    preds.append(0)
-                else:
-                    preds.append(self.default_class_)
-        else:
-            # Fallback if array passed
-            preds = [self.default_class_] * len(X)
-        return np.array(preds, dtype=int)
+    def predict(self, X):
+        rule_ids = self._evaluate_rules(X)
+        return np.where(rule_ids == 3, 1, 0).astype(int)
 
     def predict_proba(self, X):
-        preds = self.predict(X)
-        proba = np.zeros((len(preds), 2))
-        for i, p in enumerate(preds):
-            if p == 1:
-                proba[i] = [0.10, 0.90]
-            else:
-                proba[i] = [0.90, 0.10]
-        return proba
+        rule_ids = self._evaluate_rules(X)
+        p1 = np.array([self.rule_prob_map_.get(int(r), self.default_prob_) for r in rule_ids], dtype=float)
+        p1 = np.clip(p1, 1e-6, 1.0 - 1e-6)
+        return np.column_stack([1.0 - p1, p1])
 
 
 # ==============================================================================
@@ -155,7 +184,7 @@ def build_model_pipelines(preprocessor, random_state=42):
 
         # Symbolic Rule Baselines (LO3)
         "Credit History One-Rule": CreditHistoryRuleClassifier(),
-        "Symbolic Expert Rules": SymbolicExpertSystemClassifier(),
+        "Symbolic Expert Rules": SymbolicExpertSystemClassifier(max_lti=3.0),
 
         # Machine Learning Classifiers
         "Logistic Regression": Pipeline([
